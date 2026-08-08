@@ -26,8 +26,8 @@ import           Test.QuickCheck
 import           Test.Tasty
 import           Test.Tasty.QuickCheck
 
-test :: IO ()
-test = defaultMain $ testGroup "Writer" strictnessTest
+test :: TestTree
+test = testGroup "Writer" strictnessTest
 
 -- | NOTE: Monoid choice
 --
