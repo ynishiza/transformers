@@ -13,20 +13,29 @@ module Arbitrary
     F1 (..),
     F1Bot (..),
     withBaseMonad,
+    isBottomError,
   )
 where
 
-import           Control.Exception (evaluate)
+import           Control.Exception (ErrorCall, Exception (displayException),
+                                    evaluate, try)
 
 import           Data.Data
 import           Data.Functor.Identity (Identity (..))
+import           Data.List (isInfixOf)
 import           Data.Tuple.Solo
+
+import           GHC.IO (unsafePerformIO)
 
 import           Test.ChasingBottoms.IsBottom (isBottom)
 import           Test.QuickCheck
 
 bottom :: forall a. a
 bottom = error "<bottom>"
+
+-- Check error message only i.e. the prefix, ignoring the stacktrace.
+isBottomError :: ErrorCall -> Bool
+isBottomError e = "<bottom>" `isInfixOf` displayException e
 
 -- | Arbitrary (Bot a) values may be bottom.
 --
@@ -75,7 +84,8 @@ instance Arbitrary a => Arbitrary (Bot a) where
       ]
 
 -- | Arbitrary function of one argument.
-newtype F1 a b = F1 { unF1 :: a -> b }
+newtype F1 a b
+  = F1 { unF1 :: a -> b }
   deriving newtype (Arbitrary)
 
 instance (Typeable a, Typeable b) => Show (F1 a b) where
@@ -93,7 +103,8 @@ instance (Typeable a, Typeable b) => Show (F1 a b) where
 --
 -- In particular, the QuickCheck built-in Func cannot be used for this, since
 -- Func a (Bot b) generates a function which may or may not bottom depending on the input.
-newtype F1Bot a b = F1Bot { unF1Bot :: a -> b }
+newtype F1Bot a b
+  = F1Bot { unF1Bot :: a -> b }
 
 instance (CoArbitrary a, Arbitrary b) => Arbitrary (F1Bot a b) where
   arbitrary = do
@@ -105,7 +116,14 @@ instance (CoArbitrary a, Arbitrary b) => Arbitrary (F1Bot a b) where
 
 instance (Typeable a, Typeable b) => Show (F1Bot a b) where
   show :: F1Bot a b -> String
-  show _ = a <> " -> " <> b
+  show (F1Bot f) = if unsafePerformIO isBottomFunc
+                      then a <> " -> bottom"
+                      else a <> " -> " <> b
     where
+      isBottomFunc = do
+          result <- try (evaluate (f undefined))
+          case result of
+            Left (e :: ErrorCall) -> return $ isBottomError e
+            _                     -> return False
       a = show $ typeRep (Proxy @a)
       b = show $ typeRep (Proxy @b)
