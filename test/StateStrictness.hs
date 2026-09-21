@@ -6,21 +6,22 @@ module StateStrictness (test) where
 
 import           Arbitrary
 
+import           Control.Applicative
+import           Control.Monad.Fix (mfix)
 import qualified Control.Monad.Trans.State.Lazy as Lazy
 import qualified Control.Monad.Trans.State.Strict as Strict
 import qualified Control.Monad.Trans.Writer.Strict as Writer
 
 import           Data.Coerce (coerce)
 import           Data.Functor.Contravariant
+import           Data.Functor.Identity (Identity (..))
 import           Data.Tuple.Solo
 
 import           StrictnessCheck
 
+import           Test.ChasingBottoms (isBottom)
 import           Test.Tasty
 import           Test.Tasty.QuickCheck
-import Test.ChasingBottoms (isBottom)
-import Control.Monad.Fix (mfix)
-import Data.Functor.Identity (Identity(..))
 
 test :: TestTree
 test = testGroup "State" strictnessTest
@@ -31,19 +32,19 @@ strictnessTest = [
   -- The output is exactly the same as the input.
   testGroup "evalStateT" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let result = flip Lazy.evalStateT () $ Lazy.StateT (MkSolo . x) 
+      let result = flip Lazy.evalStateT () $ Lazy.StateT (MkSolo . x)
        in isLazy result .&. isStrictIn (x ()) (getSolo result),
     testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let result = flip Strict.evalStateT () $ Strict.StateT (MkSolo . x) 
+      let result = flip Strict.evalStateT () $ Strict.StateT (MkSolo . x)
        in isLazy result .&. isStrictIn (x ()) (getSolo result)
   ],
   testGroup "execStateT" [
     -- NOTE: See note on evalStateT.
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let result = flip Lazy.execStateT () $ Lazy.StateT (MkSolo . x) 
+      let result = flip Lazy.execStateT () $ Lazy.StateT (MkSolo . x)
        in isLazy result .&. isStrictIn (x ()) (getSolo result),
     testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let result = flip Strict.execStateT () $ Strict.StateT (MkSolo . x) 
+      let result = flip Strict.execStateT () $ Strict.StateT (MkSolo . x)
        in isLazy result .&. isStrictIn (x ()) (getSolo result)
   ],
 
@@ -57,7 +58,7 @@ strictnessTest = [
       let result = flip Strict.runStateT () $ Strict.withStateT f (Strict.StateT (MkSolo . x))
        in isLazy result .&. isStrictIn (x ()) (getSolo result)
   ],
-  
+
   testGroup "put" [
     -- NOTE: Lazy and Strict are the same since there is no computational sequence involved.
     testProperty "Lazy"   $ \(Bot (x :: Int)) ->
@@ -70,19 +71,19 @@ strictnessTest = [
     testProperty "Lazy"   $ \(F1Bot (f :: Int -> Int)) ->
       isValueLazy getSolo $ flip Lazy.runStateT 0 $ Lazy.modify f,
     testProperty "Strict" $ \(F1Bot (f :: Int -> Int)) ->
-      isValueLazy getSolo $ flip Strict.runStateT 0 $ Strict.modify f 
+      isValueLazy getSolo $ flip Strict.runStateT 0 $ Strict.modify f
   ],
   testGroup "modify'" [
     testProperty "Lazy"   $ \(F1Bot (f :: Int -> Int)) ->
       isStrictIn (f 0) $ flip Lazy.runStateT 0 $ Lazy.modify' @Solo f,
     testProperty "Strict" $ \(F1Bot (f :: Int -> Int)) ->
-      isStrictIn (f 0) $ flip Strict.runStateT 0 $ Strict.modify' @Solo f 
+      isStrictIn (f 0) $ flip Strict.runStateT 0 $ Strict.modify' @Solo f
   ],
   testGroup "modifyM" [
     testProperty "Lazy"   $ \(F1Bot (f :: Int -> Int)) ->
       isValueLazy getSolo $ flip Lazy.runStateT 0 $ Lazy.modifyM $ MkSolo . f,
     testProperty "Strict" $ \(F1Bot (f :: Int -> Int)) ->
-      isValueLazy getSolo $ flip Strict.runStateT 0 $ Strict.modifyM $ MkSolo . f 
+      isValueLazy getSolo $ flip Strict.runStateT 0 $ Strict.modifyM $ MkSolo . f
   ],
 
 
@@ -91,14 +92,14 @@ strictnessTest = [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
       isValueLazy getSolo $ flip Lazy.runStateT () $  (+1) <$> Lazy.StateT (MkSolo. x),
     testProperty "Strict"   $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let result = flip Strict.runStateT () $ (+1) <$> Strict.StateT (MkSolo . x) 
+      let result = flip Strict.runStateT () $ (+1) <$> Strict.StateT (MkSolo . x)
        in isLazy result .&. isStrictIn (x ()) (getSolo result)
   ],
 
   testGroup "Applicative: <*>" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (y :: () -> (F1 Int Int, ()))) ->
       let f' = coerce y :: () -> (Int -> Int, ())
-      in isValueLazy getSolo $ flip Lazy.runStateT () $ Lazy.StateT (MkSolo . f') <*> Lazy.StateT (MkSolo . x),
+       in isValueLazy getSolo $ flip Lazy.runStateT () $ Lazy.StateT (MkSolo . f') <*> Lazy.StateT (MkSolo . x),
     testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (y :: () -> (F1 Int Int, ()))) ->
       let f' = coerce y :: () -> (Int -> Int, ())
           result =  flip Strict.runStateT () $ Strict.StateT (MkSolo . f') <*> Strict.StateT (MkSolo . x)
@@ -128,7 +129,7 @@ strictnessTest = [
       let f = getOp $ flip Lazy.runStateT () $ contramap (+1) $ Lazy.StateT (const $ Op id)
       in isLazy $ f x,
     testProperty "Strict" $ \(Bot (x :: (Int, ()))) ->
-      let f = getOp $ flip Strict.runStateT () $ contramap (+1) $ Strict.StateT (const $ Op id) 
+      let f = getOp $ flip Strict.runStateT () $ contramap (+1) $ Strict.StateT (const $ Op id)
       in isStrictIn x $ f x
   ],
 
@@ -145,25 +146,25 @@ strictnessTest = [
   -- == Lift ==
   testGroup "liftListen" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
-      let listen = Lazy.liftListen $ Writer.listen @Solo 
-          value = Lazy.StateT (Writer.writer . (,"a") <$> x) 
-          result = Writer.runWriterT $ Lazy.runStateT (listen value) () 
+      let listen = Lazy.liftListen $ Writer.listen @Solo
+          value = Lazy.StateT (Writer.writer . (,"a") <$> x)
+          result = Writer.runWriterT $ Lazy.runStateT (listen value) ()
        in isValueLazy getSolo result,
     testProperty "Strict" $ \(F1Bot (x :: () -> ((Int, ()), ()))) ->
-      let listen = Strict.liftListen $ Writer.listen @Solo 
-          value = Strict.StateT (Writer.writer . (,"a") <$> x) 
-          result = Writer.runWriterT $ Strict.runStateT (listen value) () 
+      let listen = Strict.liftListen $ Writer.listen @Solo
+          value = Strict.StateT (Writer.writer . (,"a") <$> x)
+          result = Writer.runWriterT $ Strict.runStateT (listen value) ()
        in isStrictIn (x ()) result
   ],
 
   testGroup "liftPass" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> ((Int, String -> String), ()))) ->
-      let pass = Lazy.liftPass $ Writer.pass @Solo 
+      let pass = Lazy.liftPass $ Writer.pass @Solo
           value = pass $ Lazy.StateT (Writer.writer . (,"a") <$> x)
           result = Writer.runWriterT $ Lazy.runStateT value ()
        in isValueLazy getSolo result,
     testProperty "Strict" $ \(F1Bot (x :: () -> ((Int, String -> String), ()))) ->
-      let pass = Strict.liftPass $ Writer.pass @Solo 
+      let pass = Strict.liftPass $ Writer.pass @Solo
           value = pass $ Strict.StateT (Writer.writer . (,"a") <$> x)
           result = Writer.runWriterT $ Strict.runStateT value ()
        in isStrictIn (x ()) result
@@ -177,9 +178,12 @@ strictnessTest = [
       (F1Bot (f :: Int -> Int))
       (Bot (s :: String))
       (Bot (t :: ())) ->
-        let expected = if isBottom (f 0) 
-            then not (isBottom s) || not (isBottom t)
-            else isBottom (x 0)
+        -- TODO: Solo is strict in sequencing whereas Identity is lazy
+        --
+        --    MkSolo x >>= k = k x          strict due to MkSolo
+        --    x >>= k = k (runIdentity x)   lazy due to runIdentity
+        --
+        let expected = isStrictMonad m && isBottom (f (snd (x 0)))
          in shouldBeBottomIO expected $ withBaseMonad m $ flip Lazy.runStateT 0 $ do
           p <- Lazy.StateT $ return . x
           q <- Lazy.get
