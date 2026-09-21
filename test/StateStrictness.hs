@@ -177,9 +177,11 @@ strictnessTest = [
       (F1Bot (f :: Int -> Int))
       (Bot (s :: String))
       (Bot (t :: ())) ->
-        let expected = if isBottom (f 0) 
-            then not (isBottom s) || not (isBottom t)
-            else isBottom (x 0)
+        -- TODO: Solo is strict in sequencing whereas Identity is lazy
+        --
+        --    MkSolo x >>= k = k x          strict due to MkSolo 
+        --    x >>= k = k (runIdentity x)   lazy due to runIdentity
+        let expected = show m `elem` ["LazyBaseMonad IO", "LazyBaseMonad Solo"] && isBottom (f (snd (x 0)))
          in shouldBeBottomIO expected $ withBaseMonad m $ flip Lazy.runStateT 0 $ do
           p <- Lazy.StateT $ return . x
           q <- Lazy.get
