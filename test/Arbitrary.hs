@@ -8,25 +8,34 @@
 
 module Arbitrary
   ( Bot (..),
-    BaseMonad (..),
-    isStrictMonad,
+    BaseMonad,
+    baseMonadName,
     F1 (..),
     F1Bot (..),
     withBaseMonad,
+    isBottomError,
   )
 where
 
-import           Control.Exception (evaluate)
+import           Control.Exception (ErrorCall, Exception (displayException),
+                                    evaluate, try)
 
 import           Data.Data
 import           Data.Functor.Identity (Identity (..))
+import           Data.List (isInfixOf)
 import           Data.Tuple.Solo
+
+import           GHC.IO (unsafePerformIO)
 
 import           Test.ChasingBottoms.IsBottom (isBottom)
 import           Test.QuickCheck
 
 bottom :: forall a. a
 bottom = error "<bottom>"
+
+-- Check error message only i.e. the prefix, ignoring the stacktrace.
+isBottomError :: ErrorCall -> Bool
+isBottomError e = "<bottom>" `isInfixOf` displayException e
 
 -- | Arbitrary (Bot a) values may be bottom.
 --
@@ -35,34 +44,29 @@ newtype Bot a
   = Bot { unBot :: a }
 
 data BaseMonad
-  = forall m. (Typeable m, Monad m) => LazyBaseMonad (forall a. m a -> IO a)
-  | forall m. (Typeable m, Monad m) => StrictBaseMonad (forall a. m a -> IO a)
+  = forall m. (Typeable m, Monad m) => BaseMonad (forall a. m a -> IO a)
 
 -- Use the underlying Monad of a BaseMonad.
 withBaseMonad :: BaseMonad -> (forall m. (Monad m) => m a) -> IO a
-withBaseMonad (LazyBaseMonad v)   = v
-withBaseMonad (StrictBaseMonad v) = v
+withBaseMonad (BaseMonad v)   = v
 
-isStrictMonad :: BaseMonad -> Bool
-isStrictMonad (LazyBaseMonad _)   = False
-isStrictMonad (StrictBaseMonad _) = True
+baseMonadName :: BaseMonad -> String
+baseMonadName (BaseMonad m) = getName m
+  where
+      getName :: forall m. (Typeable m) => (forall a. m a -> IO a) -> String
+      getName _ = show $ typeRep (Proxy @m)
 
 instance Arbitrary BaseMonad where
   arbitrary =
     elements
-      [ LazyBaseMonad id,                           -- IO
-        StrictBaseMonad (evaluate . runIdentity),   -- Identity
-        LazyBaseMonad (evaluate . getSolo),         -- Solo
-        LazyBaseMonad (\f -> evaluate $ f ())       -- constant function () -> a
+      [ BaseMonad id,                         -- IO
+        BaseMonad (evaluate . runIdentity),   -- Identity: newtype, lazy sequencing
+        BaseMonad (evaluate . getSolo),       -- Solo: lazy type, strict sequencing
+        BaseMonad (\f -> evaluate $ f ())     -- constant function () -> a: lazy type, lazy sequencing
       ]
 
 instance Show BaseMonad where
-  show v = case v of
-    (StrictBaseMonad m) -> "StrictBaseMonad " <> getName m
-    (LazyBaseMonad m)   -> "LazyBaseMonad " <> getName m
-    where
-      getName :: forall m. (Typeable m) => (forall a. m a -> IO a) -> String
-      getName _ = show $ typeRep (Proxy @m)
+  show v@(BaseMonad {}) = "BaseMonad " <> baseMonadName v
 
 instance Show a => Show (Bot a) where
   show (Bot x) = if isBottom x then "<bottom>" else show x
@@ -105,7 +109,14 @@ instance (CoArbitrary a, Arbitrary b) => Arbitrary (F1Bot a b) where
 
 instance (Typeable a, Typeable b) => Show (F1Bot a b) where
   show :: F1Bot a b -> String
-  show _ = a <> " -> " <> b
+  show (F1Bot f) = if unsafePerformIO isBottomFunc
+                      then a <> " -> bottom"
+                      else a <> " -> " <> b
     where
+      isBottomFunc = do
+          result <- try (evaluate (f undefined))
+          case result of
+            Left (e :: ErrorCall) -> return $ isBottomError e
+            _                     -> return False
       a = show $ typeRep (Proxy @a)
       b = show $ typeRep (Proxy @b)
