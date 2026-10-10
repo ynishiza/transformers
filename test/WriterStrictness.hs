@@ -68,9 +68,14 @@ type SumInt = Sum Int
 --
 --    if   k _|_  = _|_    then also    (return _|_) >>= k   = _|_
 --
--- b) lazy in its constructor
+-- b) does not short-circuit in the bind
+-- e.g. Maybe short-circuits
 --
--- We employ Solo since it is a simple monad that has both properties.
+--   Nothing >>= _|_     = Nothing
+--
+-- c) lazy in its constructor
+--
+-- Considering the above, we employ Solo since it is a simple monad that has both properties.
 --
 -- The reasoning is as follows.
 -- The distinguishing feature of the strict writer is that it is strict in the sequencing of computations.
@@ -78,11 +83,9 @@ type SumInt = Sum Int
 -- is strict with the strict writer and lazy with the lazy writer.
 -- The map k of the CPS writer is further strict in the log w of (a, w) >>= k.
 -- Thus, in order to observe this effect in tests, we need to use a monad that preserves this property.
--- Not all monads satsify this property. e.g. Maybe may short-circuit
 --
---   runWriter (WriterT Nothing >>= undefined)    = Nothing
---
--- Using such a monad can complicate the tests.
+-- Short-circuiting is a problem since it also breaks the preservation of strictness, as seen in the Maybe example.
+-- Thus, using such a monad will also complicate the tests.
 --
 -- However, for the data type itself, we use one that is lazy.
 -- This is because otherwise, it becomes impossible to distinguish between a map k that bottoms in the monad itself or the computed value.

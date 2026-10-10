@@ -1,14 +1,17 @@
 module Main (main) where
 
 import qualified ComposeT
-import qualified WriterStrictness
+
 import qualified StateStrictness
-import Test.Tasty
+
+import           Test.Tasty
+
+import qualified WriterStrictness
 
 main :: IO ()
 main = do
   ComposeT.test
   defaultMain $ testGroup "Transformers" [
-    WriterStrictness.test,
-    StateStrictness.test
+    StateStrictness.test,
+    WriterStrictness.test
    ]
