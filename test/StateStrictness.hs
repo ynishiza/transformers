@@ -26,10 +26,14 @@ import           Test.Tasty.QuickCheck
 test :: TestTree
 test = testGroup "State" strictnessTest
 
+-- | NOTE: Strictness test
+--
+-- See note in WriterStrictness.hs regarding the choice of Solo as the monad used for testing.
+--
 strictnessTest :: [TestTree]
 strictnessTest = [
-  -- NOTE: Lazy and Strict are the same since there is no computational sequence involved.
-  -- The output is exactly the same as the input.
+  -- NOTE: Lazy and Strict are the same since there is no computation involved.
+  -- i.e. just returns the input.
   testGroup "evalStateT" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
       let result = flip Lazy.evalStateT () $ Lazy.StateT (MkSolo . x)
@@ -49,8 +53,7 @@ strictnessTest = [
   ],
 
   testGroup "withStateT" [
-    -- NOTE: Lazy and Strict are the same since there is no computational sequence involved.
-    -- The output is exactly the same as the input.
+    -- NOTE: f is not evaluated strictly, so the result depends only on the original input.
     testProperty "Lazy"   $ \(F1Bot (f :: () -> ())) (F1Bot (x :: () -> (Int, ()))) ->
       let result = flip Lazy.runStateT () $ Lazy.withStateT f (Lazy.StateT (MkSolo . x))
        in isLazy result .&. isStrictIn (x ()) (getSolo result),
@@ -60,7 +63,7 @@ strictnessTest = [
   ],
 
   testGroup "put" [
-    -- NOTE: Lazy and Strict are the same since there is no computational sequence involved.
+    -- NOTE: lazy since there is no computation involved.
     testProperty "Lazy"   $ \(Bot (x :: Int)) ->
       isValueLazy getSolo $ flip Lazy.runStateT 0 $ Lazy.put x,
     testProperty "Strict" $ \(Bot (x :: Int)) ->
@@ -91,8 +94,9 @@ strictnessTest = [
   testGroup "Functor: fmap" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) ->
       isValueLazy getSolo $ flip Lazy.runStateT () $  (+1) <$> Lazy.StateT (MkSolo. x),
-    testProperty "Strict"   $ \(F1Bot (x :: () -> (Int, ()))) ->
+    testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) ->
       let result = flip Strict.runStateT () $ (+1) <$> Strict.StateT (MkSolo . x)
+       -- Does not bottom in the outer constructor since Functor only exposes control over the inner value.
        in isLazy result .&. isStrictIn (x ()) (getSolo result)
   ],
 
@@ -102,18 +106,17 @@ strictnessTest = [
        in isValueLazy getSolo $ flip Lazy.runStateT () $ Lazy.StateT (MkSolo . f') <*> Lazy.StateT (MkSolo . x),
     testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (y :: () -> (F1 Int Int, ()))) ->
       let f' = coerce y :: () -> (Int -> Int, ())
-          result =  flip Strict.runStateT () $ Strict.StateT (MkSolo . f') <*> Strict.StateT (MkSolo . x)
-       in isBiStrictIn (x ()) (f' ()) (getSolo result)
+          result = flip Strict.runStateT () $ Strict.StateT (MkSolo . f') <*> Strict.StateT (MkSolo . x)
+       in isBiStrictIn (x ()) (f' ()) result
   ],
   testGroup "Applicative: liftA2" [
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (y :: () -> (Int, ()))) ->
-      isValueLazy getSolo $ Lazy.runStateT  (liftA2 (+) (Lazy.StateT $ MkSolo . x)  (Lazy.StateT $ MkSolo . y)) (),
+      isValueLazy getSolo $ Lazy.runStateT (liftA2 (+) (Lazy.StateT $ MkSolo . x)  (Lazy.StateT $ MkSolo . y)) (),
     testProperty "Strict" $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (q :: () -> (Int, ()))) ->
-      isBiStrictIn (x ()) (q ()) $ Strict.runStateT  (liftA2 (+) (Strict.StateT $ MkSolo . x)  (Strict.StateT $ MkSolo . q)) ()
+      isBiStrictIn (x ()) (q ()) $ Strict.runStateT (liftA2 (+) (Strict.StateT $ MkSolo . x)  (Strict.StateT $ MkSolo . q)) ()
   ],
 
   testGroup "Monad: >>=" [
-    -- NOTE:
     testProperty "Lazy"   $ \(F1Bot (x :: () -> (Int, ()))) (F1Bot (k :: () -> (Int, ()))) ->
       let result = flip Lazy.runStateT () $ Lazy.StateT (MkSolo . x) >>= const (Lazy.StateT (MkSolo . k))
        in isLazy result .&. isStrictIn (k ()) (getSolo result),
@@ -142,6 +145,7 @@ strictnessTest = [
       let x' = unF1 x
        in x' () === runIdentity (Strict.runStateT (mfix (const (Strict.StateT $ Identity . x'))) ())
   ],
+
 
   -- == Lift ==
   testGroup "liftListen" [
@@ -177,34 +181,40 @@ strictnessTest = [
       (F1Bot (x :: Int -> (String, Int)))
       (F1Bot (f :: Int -> Int))
       (Bot (s :: String))
-      (Bot (t :: ())) ->
-        -- TODO: Solo is strict in sequencing whereas Identity is lazy
+      (Bot (t :: Int)) ->
+        -- In general, the computations are lazy since this is the Lazy State.
         --
-        --    MkSolo x >>= k = k x          strict due to MkSolo
-        --    x >>= k = k (runIdentity x)   lazy due to runIdentity
+        -- However, one exception is modify', which enforces strictness on the state value.
+        -- Thus, modify' will bottom for monads which are strict in the underlying sequencing.
+        -- i.e. Solo and IO
         --
-        let expected = isStrictMonad m && isBottom (f (snd (x 0)))
+        -- In particular, note that Identity is lazy whereas Solo is strict:
+        --
+        --   m >>= k    = k (runIdentity m)     lazy due to runIdentity thunk
+        --   MkSolo x >>= k = k x               strict
+        --
+        let expected = (baseMonadName m == "Solo" || baseMonadName m == "IO") && isBottom (f (snd (x 0)))
          in shouldBeBottomIO expected $ withBaseMonad m $ flip Lazy.runStateT 0 $ do
           p <- Lazy.StateT $ return . x
           q <- Lazy.get
-          Lazy.modify' f
+
+          Lazy.modify' f -- may throw depending on the underlying monad. See above.
+
           Lazy.put $ q + length (s <> p)
-          Lazy.gets (const t)
-            ,
+          Lazy.gets (+ t),
 
     testProperty "Strict" $
       \m
       (F1Bot (x :: Int -> (String, Int)))
       (F1Bot (f :: Int -> Int))
       (Bot (s :: String))
-      (Bot (t :: ())) ->
+      (Bot (t :: Int)) ->
         let expected = isBottom (x 0) || isBottom (f 0)
          in shouldBeBottomIO expected $ withBaseMonad m $ flip Strict.runStateT 0 $ do
           p <- Strict.StateT $ return . x
           q <- Strict.get
           Strict.modify' f
           Strict.put $ q + length (s <> p)
-          Strict.gets (const t)
+          Strict.gets (+ t)
   ]
  ]
-

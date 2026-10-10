@@ -48,8 +48,8 @@ isBiStrictIn :: arg1 -> arg2 -> o -> Property
 isBiStrictIn x y  =
     let bottomX = isBottom x
         bottomY = isBottom y
-   in label (bottomLabelFor "arg1" bottomX <> ", " <> bottomLabelFor "arg2" bottomY)
-    . shouldBeBottom (bottomX || bottomY)
+    in label (bottomLabelFor "arg1" bottomX <> ", " <> bottomLabelFor "arg2" bottomY)
+      . shouldBeBottom (bottomX || bottomY)
 
 shouldBeBottom :: Bool -> o -> Property
 shouldBeBottom expectBottom result = classify expectBottom bottomLabel $
